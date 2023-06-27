@@ -308,12 +308,75 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 #define EXE_NAME_ARG (2)
 
 
-void debuggerProc(int sonPid, bool isDynamic, unsigned long offset) {
+// Set breakpoint on function retAddr
+unsigned long setBreakpoint(int sonPid, unsigned long addr) {
+        unsigned long originalInstruction = ptrace(PTRACE_PEEKTEXT, sonPid, addr, NULL);
+        unsigned long  trapInstruction = (originalInstruction & 0xFFFFFFFFFFFFFF00) | 0xCC;
+        ptrace(PTRACE_POKETEXT, sonPid, addr, trapInstruction);
+        return originalInstruction;
+}
+
+int contChild(int sonPid, int *wait_status) {
+    ptrace(PTRACE_CONT, sonPid, NULL, NULL);
+    return waitpid(sonPid, wait_status, 0);
+}
+
+int singleStepChild(int sonPid, int *wait_status) {
+    ptrace(PTRACE_SINGLESTEP, sonPid, NULL, NULL);
+    return waitpid(sonPid, wait_status, 0);
+}
+
+void removeBreakpoint(int sonPid, unsigned long addr, unsigned long originalInstruction, struct user_regs_struct *regs) {
+    ptrace(PTRACE_POKETEXT, sonPid, addr, originalInstruction);
+    regs->rip -= 1;
+    ptrace(PTRACE_SETREGS, sonPid, NULL, regs);
+}
+
+void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
     int wait_status;
-    int iCounter = 0;
+    int iCounter = 1;
+    unsigned long savedRsp = 0;
 
     // Wait for first instruction
     waitpid(sonPid, &wait_status, 0);
+
+    // Stage 1 - we are not in Function context - set breakpoint on function first line
+    unsigned long originalInstruction = setBreakpoint(sonPid, funcAddr);
+    contChild(sonPid, &wait_status);
+
+    while (true) {
+        // Check if we are in function adress, by comparing correct adress to funcAddr
+        // Get rip register
+        struct user_regs_struct regs;
+        unsigned long retAddr;
+        ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
+        unsigned long currentAddress = regs.rip -1;
+
+        if (currentAddress == funcAddr) {
+            // Stage 2 - now we are in function first line, it was just called
+            savedRsp = regs.rsp;
+            ptrace(PTRACE_PEEKTEXT, sonPid, savedRsp - 8, &retAddr);
+            originalInstruction = setBreakpoint(sonPid, retAddr);
+            printf("PRF:: run #%d first parameter is %d\n", iCounter, regs.rdi);
+            
+        } else {
+            // Stage 3 - We are now at the return address - check if in function context or not
+            // We do this by comparing saved rsp to current rsp
+            if (regs.rsp == savedRsp - 8) {
+                // We are in function context,advance one step, return BP at return address, and continue
+                removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
+                singleStepChild(sonPid, &wait_status);
+                originalInstruction = setBreakpoint(sonPid, retAddr);
+            } else {
+                // We are not in function context:
+                removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
+                originalInstruction = setBreakpoint(sonPid, funcAddr);
+                printf("PRF:: run #%d returned with %d\n", iCounter, regs.rax);
+                iCounter++;
+            }
+        }
+        contChild(sonPid, &wait_status);;
+    }
 
 
     
@@ -326,9 +389,11 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long offset) {
 void sonProc(char *const argv[]) {
     if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
         perror("failed ptrace traceme");
-        exit(0)
+        exit(0);
     }
     execl(argv[EXE_NAME_ARG], *argv[EXE_NAME_ARG], NULL);
+    perror("failed execl");
+    
 }
 
 
