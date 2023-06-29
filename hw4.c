@@ -312,23 +312,36 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 unsigned long readLong(int sonPid, unsigned long addr) {
     unsigned long data = 0;
     data = ptrace(PTRACE_PEEKTEXT, sonPid, addr, NULL);
-    data = data << 32; // shift 4 bytes
-    data = data | ptrace(PTRACE_PEEKTEXT, sonPid, addr + 4, NULL);
+    // data = data << 32; // shift 4 bytes
+    // data = data | ptrace(PTRACE_PEEKTEXT, sonPid, addr, NULL);
+    long data1 = -1;
+    long data2 = -1;
+    data1 = ptrace(PTRACE_PEEKTEXT, sonPid, addr, NULL);
+    data2 = ptrace(PTRACE_PEEKTEXT, sonPid, addr-4, NULL);
+    // printf("data at addr:%lx\n", data1);
+    // printf("data at addr-4:%lx\n", data2);
+    // printf("data at addr+4:%lx\n", ptrace(PTRACE_PEEKTEXT, sonPid, addr+4, NULL));
+    // printf("data at addr+8:%lx\n", ptrace(PTRACE_PEEKTEXT, sonPid, addr+8, NULL));
+    // printf("data at addr-8:%lx\n", ptrace(PTRACE_PEEKTEXT, sonPid, addr-8, NULL));
     return data;
 }
 
 // Set breakpoint on function retAddr
 unsigned long setBreakpoint(int sonPid, unsigned long addr) {
+    // printf("setting BP at: %lx\n", addr);
         unsigned long originalInstruction = readLong(sonPid, addr); 
+        // printf("orig: %lx\n", originalInstruction);
         unsigned long  trapInstruction = (originalInstruction & 0xFFFFFFFFFFFFFF00) | 0xCC;
         ptrace(PTRACE_POKETEXT, sonPid, addr, trapInstruction);
+        // printf("changed: %lx\n",  readLong(sonPid, addr));
         return originalInstruction;
 }
 
 int contChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_CONT, sonPid, NULL, NULL);
-    waitpid(sonPid, wait_status, 0);
+    wait(wait_status);
     if (WIFEXITED(*wait_status)) {
+        printf("Child exited!!! \n");
         //exit(0);
         return -1;
     }
@@ -336,8 +349,9 @@ int contChild(int sonPid, int *wait_status) {
 
 int singleStepChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_SINGLESTEP, sonPid, NULL, NULL);
-    waitpid(sonPid, wait_status, 0);
+    wait(wait_status);
     if (WIFEXITED(*wait_status)) {
+        printf("Child exited!!!, status: \n");
         //exit(0);
         return -1;
     }
@@ -368,42 +382,50 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
     } else {
         // Stage 1 - Find real function address
         // Set Breakpoint on plt line
-        funcAddr = *((unsigned long*)addrGOT);
+        funcAddr = readLong(sonPid, addrGOT);
         originalInstruction = setBreakpoint(sonPid, funcAddr);
         RETURN_ON_ERROR(contChild(sonPid, &wait_status));
     }
 
     struct user_regs_struct regs;
     unsigned long retAddr;
+    unsigned long currentAddress;
     while (true) {
-        printf("in while\n");
+        
         fflush(stdout);
         // Check if we are in function adress, by comparing correct adress to funcAddr
         // Get rip register
         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
-        unsigned long currentAddress = regs.rip -1;
+        currentAddress = regs.rip -1;
 
+        printf("in while, current addr: %lx\n", currentAddress);
         if (currentAddress == funcAddr) {
+            printf("in S2\n");
             // Stage 2 - now we are in function first line, it was just called
             savedRsp = regs.rsp;
-            retAddr = readLong(sonPid, savedRsp - 8);
+            removeBreakpoint(sonPid, funcAddr, originalInstruction, &regs);
+            retAddr = readLong(sonPid, savedRsp);
             printf("retAddr is %lx, size: %ld\n", retAddr, sizeof(retAddr));
             originalInstruction = setBreakpoint(sonPid, retAddr);
             printf("PRF:: run #%d first parameter is %lld\n", iCounter, regs.rdi);
             
         } else {
+            printf("in S3\n");
             // Stage 3 - We are now at the return address - check if in function context or not
             // We do this by comparing saved rsp to current rsp
-            if (regs.rsp != savedRsp - 8) {
+            if (regs.rsp != savedRsp + 8) {
+                printf("in S3 - in recursive\n");
                 // We are in function context,advance one step, return BP at return address, and continue
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 RETURN_ON_ERROR(singleStepChild(sonPid, &wait_status));
                 originalInstruction = setBreakpoint(sonPid, retAddr);
             } else {
+                
+                printf("in S3 - out recursive\n");
                 // We are not in function context:
                 if (shouldUpdateAddr) {
                     // Update funcAddr to the real one from GOT
-                    funcAddr = *((unsigned long*)addrGOT);
+                    funcAddr =  readLong(sonPid, addrGOT);
                     shouldUpdateAddr = false;
                 }
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
