@@ -309,10 +309,17 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 
 #define RETURN_ON_ERROR(x) if (x < 0) {return;}
 
+unsigned long readLong(int sonPid, unsigned long addr) {
+    unsigned long data = 0;
+    data = ptrace(PTRACE_PEEKTEXT, sonPid, addr, NULL);
+    data = data << 32; // shift 4 bytes
+    data = data | ptrace(PTRACE_PEEKTEXT, sonPid, addr + 4, NULL);
+    return data;
+}
 
 // Set breakpoint on function retAddr
 unsigned long setBreakpoint(int sonPid, unsigned long addr) {
-        unsigned long originalInstruction = ptrace(PTRACE_PEEKTEXT, sonPid, addr, NULL);
+        unsigned long originalInstruction = readLong(sonPid, addr); 
         unsigned long  trapInstruction = (originalInstruction & 0xFFFFFFFFFFFFFF00) | 0xCC;
         ptrace(PTRACE_POKETEXT, sonPid, addr, trapInstruction);
         return originalInstruction;
@@ -369,6 +376,8 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
     struct user_regs_struct regs;
     unsigned long retAddr;
     while (true) {
+        printf("in while\n");
+        fflush(stdout);
         // Check if we are in function adress, by comparing correct adress to funcAddr
         // Get rip register
         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
@@ -377,7 +386,8 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
         if (currentAddress == funcAddr) {
             // Stage 2 - now we are in function first line, it was just called
             savedRsp = regs.rsp;
-            ptrace(PTRACE_PEEKTEXT, sonPid, savedRsp - 8, &retAddr);
+            retAddr = readLong(sonPid, savedRsp - 8);
+            printf("retAddr is %lx, size: %ld\n", retAddr, sizeof(retAddr));
             originalInstruction = setBreakpoint(sonPid, retAddr);
             printf("PRF:: run #%d first parameter is %lld\n", iCounter, regs.rdi);
             
