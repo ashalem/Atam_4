@@ -307,6 +307,8 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 #define SYMBOL_NAME_ARG (1)
 #define EXE_NAME_ARG (2)
 
+#define RETURN_ON_ERROR(x) if (x < 0) {return;}
+
 
 // Set breakpoint on function retAddr
 unsigned long setBreakpoint(int sonPid, unsigned long addr) {
@@ -318,12 +320,18 @@ unsigned long setBreakpoint(int sonPid, unsigned long addr) {
 
 int contChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_CONT, sonPid, NULL, NULL);
-    return waitpid(sonPid, wait_status, 0);
+    waitpid(sonPid, wait_status, 0);
+    if (WIFEXITED(*wait_status)) {
+        return -1;
+    }
 }
 
 int singleStepChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_SINGLESTEP, sonPid, NULL, NULL);
-    return waitpid(sonPid, wait_status, 0);
+    waitpid(sonPid, wait_status, 0);
+    if (WIFEXITED(*wait_status)) {
+        return -1;
+    }
 }
 
 void removeBreakpoint(int sonPid, unsigned long addr, unsigned long originalInstruction, struct user_regs_struct *regs) {
@@ -336,13 +344,25 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
     int wait_status;
     int iCounter = 1;
     unsigned long savedRsp = 0;
+    unsigned long addrGOT = funcAddr;
+    bool shouldUpdateAddr = isDynamic;
 
     // Wait for first instruction
     waitpid(sonPid, &wait_status, 0);
 
-    // Stage 1 - we are not in Function context - set breakpoint on function first line
-    unsigned long originalInstruction = setBreakpoint(sonPid, funcAddr);
-    contChild(sonPid, &wait_status);
+
+    unsigned long originalInstruction = 0;
+    if (!isDynamic) {
+        // Stage 1 - we are not in Function context - set breakpoint on function first line
+        originalInstruction = setBreakpoint(sonPid, funcAddr);
+        RETURN_ON_ERROR(contChild(sonPid, &wait_status));
+    } else {
+        // Stage 1 - Find real function address
+        // Set Breakpoint on plt line
+        funcAddr = *((unsigned long*)addrGOT);
+        originalInstruction = setBreakpoint(sonPid, funcAddr);
+        RETURN_ON_ERROR(contChild(sonPid, &wait_status));
+    }
 
     while (true) {
         // Check if we are in function adress, by comparing correct adress to funcAddr
@@ -365,25 +385,23 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
             if (regs.rsp == savedRsp - 8) {
                 // We are in function context,advance one step, return BP at return address, and continue
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
-                singleStepChild(sonPid, &wait_status);
+                RETURN_ON_ERROR(singleStepChild(sonPid, &wait_status));
                 originalInstruction = setBreakpoint(sonPid, retAddr);
             } else {
                 // We are not in function context:
+                if (shouldUpdateAddr) {
+                    // Update funcAddr to the real one from GOT
+                    funcAddr = *((unsigned long*)addrGOT);
+                    shouldUpdateAddr = false;
+                }
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 originalInstruction = setBreakpoint(sonPid, funcAddr);
                 printf("PRF:: run #%d returned with %d\n", iCounter, regs.rax);
                 iCounter++;
             }
         }
-        contChild(sonPid, &wait_status);;
+        RETURN_ON_ERROR((sonPid, &wait_status));
     }
-
-
-    
-
-    // Wait for child to stop
-    waitpid(sonPid, &wait_status, 0);
- 
 }
 
 void sonProc(char *const argv[]) {
@@ -417,12 +435,12 @@ int main(int argc, char *const argv[]) {
     // Fork
     int pid = fork();
     if (pid > 0) {
+        // Father process - Debugger
         debuggerProc(pid, (err == 2), addr);
-    // Father process - Debugger
     } else {
         // Son procces - the code
         sonProc(argv);
     }
 
-    return 0
+    return 0;
 }
