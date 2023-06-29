@@ -49,7 +49,7 @@ bool checkDynSymName(char *symbol_name, FILE *elfFile, int idx,
                     Elf64_Xword dynsymTabEntSize,
                     Elf64_Sym *dynsymTab, 
                     Elf64_Off strTabOffset) {
-    printf("will check Idx %d in dyn sym for name %s\n", idx, symbol_name);
+    //printf("will check Idx %d in dyn sym for name %s\n", idx, symbol_name);
     
     // Calcualte Sym entry location
     Elf64_Sym *dynSymEntryP =  (Elf64_Sym*)(((char *)dynsymTab) + (dynsymTabEntSize*idx));   
@@ -254,7 +254,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
                 // Check if in this file or not
                 if (wantedSymbolEnt->st_shndx == 0) {
                     // Get dyn offset
-                    printf("will check dyn sym\n");
+                    //printf("will check dyn sym\n");
                     unsigned long dynOffset = find_dynSymbol(symbol_name, elfFile, sectionHeaderTable, sectionHeaderLen, sectionHeadeEntrySize, &elfHeader, dynstrTabOffset);
                     free(symTab);
                     free(sectionHeaderTable);
@@ -341,7 +341,7 @@ int contChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_CONT, sonPid, NULL, NULL);
     wait(wait_status);
     if (WIFEXITED(*wait_status)) {
-        printf("Child exited!!! \n");
+        //printf("Child exited!!! \n");
         //exit(0);
         return -1;
     }
@@ -351,7 +351,7 @@ int singleStepChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_SINGLESTEP, sonPid, NULL, NULL);
     wait(wait_status);
     if (WIFEXITED(*wait_status)) {
-        printf("Child exited!!!, status: \n");
+        //printf("Child exited!!!, status: \n");
         //exit(0);
         return -1;
     }
@@ -398,30 +398,30 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
         currentAddress = regs.rip -1;
 
-        printf("in while, current addr: %lx\n", currentAddress);
+        //printf("in while, current addr: %lx\n", currentAddress);
         if (currentAddress == funcAddr) {
-            printf("in S2\n");
+            //printf("in S2\n");
             // Stage 2 - now we are in function first line, it was just called
             savedRsp = regs.rsp;
             removeBreakpoint(sonPid, funcAddr, originalInstruction, &regs);
             retAddr = readLong(sonPid, savedRsp);
-            printf("retAddr is %lx, size: %ld\n", retAddr, sizeof(retAddr));
+            //printf("retAddr is %lx, size: %ld\n", retAddr, sizeof(retAddr));
             originalInstruction = setBreakpoint(sonPid, retAddr);
-            printf("PRF:: run #%d first parameter is %lld\n", iCounter, regs.rdi);
+            //printf("PRF:: run #%d first parameter is %lld\n", iCounter, regs.rdi);
             
         } else {
-            printf("in S3\n");
+            //printf("in S3\n");
             // Stage 3 - We are now at the return address - check if in function context or not
             // We do this by comparing saved rsp to current rsp
             if (regs.rsp != savedRsp + 8) {
-                printf("in S3 - in recursive\n");
+                //printf("in S3 - in recursive\n");
                 // We are in function context,advance one step, return BP at return address, and continue
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 RETURN_ON_ERROR(singleStepChild(sonPid, &wait_status));
                 originalInstruction = setBreakpoint(sonPid, retAddr);
             } else {
                 
-                printf("in S3 - out recursive\n");
+                //printf("in S3 - out recursive\n");
                 // We are not in function context:
                 if (shouldUpdateAddr) {
                     // Update funcAddr to the real one from GOT
@@ -430,7 +430,7 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
                 }
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 originalInstruction = setBreakpoint(sonPid, funcAddr);
-                printf("PRF:: run #%d returned with %lld\n", iCounter, regs.rax);
+                printf("PRF:: run #%d returned with %d\n", iCounter, regs.rax);
                 iCounter++;
             }
         }
@@ -459,11 +459,11 @@ int main(int argc, char *const argv[]) {
 	if (err < 0) {
         // Error :(
         if (err == -2)
-		    printf("PRF:: <%s> is not a global symbol!\n", argv[SYMBOL_NAME_ARG]);
+		    printf("PRF:: %s is not a global symbol! :(\n", argv[SYMBOL_NAME_ARG]);
 	    else if (err == -1)
-		    printf("PRF:: <%s> not found! :(\n", argv[SYMBOL_NAME_ARG]);
+		    printf("PRF:: %s not found!\n", argv[SYMBOL_NAME_ARG]);
 	    else if (err == -3)
-		    printf("PRF:: <%s> not an executable!\n\n", argv[EXE_NAME_ARG]);
+		    printf("PRF:: %s not an executable! :(\n", argv[EXE_NAME_ARG]);
 	    return 0;
     }
 
