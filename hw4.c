@@ -35,7 +35,7 @@ bool checkNameInFile(char *name, FILE *file, long offset) {
     char *symName = (char*)malloc(nameLen);
     fread(symName, nameLen, 1, file);
 
-    printf("name in offset %lu is: %s\n", offset, symName);
+    //printf("name in offset %lu is: %s\n", offset, symName);
 
     bool isSimilar = (0 == strncmp(name, symName, nameLen));
     free(symName);
@@ -322,6 +322,7 @@ int contChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_CONT, sonPid, NULL, NULL);
     waitpid(sonPid, wait_status, 0);
     if (WIFEXITED(*wait_status)) {
+        //exit(0);
         return -1;
     }
 }
@@ -330,6 +331,7 @@ int singleStepChild(int sonPid, int *wait_status) {
     ptrace(PTRACE_SINGLESTEP, sonPid, NULL, NULL);
     waitpid(sonPid, wait_status, 0);
     if (WIFEXITED(*wait_status)) {
+        //exit(0);
         return -1;
     }
 }
@@ -364,11 +366,11 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
         RETURN_ON_ERROR(contChild(sonPid, &wait_status));
     }
 
+    struct user_regs_struct regs;
+    unsigned long retAddr;
     while (true) {
         // Check if we are in function adress, by comparing correct adress to funcAddr
         // Get rip register
-        struct user_regs_struct regs;
-        unsigned long retAddr;
         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
         unsigned long currentAddress = regs.rip -1;
 
@@ -377,12 +379,12 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
             savedRsp = regs.rsp;
             ptrace(PTRACE_PEEKTEXT, sonPid, savedRsp - 8, &retAddr);
             originalInstruction = setBreakpoint(sonPid, retAddr);
-            printf("PRF:: run #%d first parameter is %d\n", iCounter, regs.rdi);
+            printf("PRF:: run #%d first parameter is %lld\n", iCounter, regs.rdi);
             
         } else {
             // Stage 3 - We are now at the return address - check if in function context or not
             // We do this by comparing saved rsp to current rsp
-            if (regs.rsp == savedRsp - 8) {
+            if (regs.rsp != savedRsp - 8) {
                 // We are in function context,advance one step, return BP at return address, and continue
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 RETURN_ON_ERROR(singleStepChild(sonPid, &wait_status));
@@ -396,11 +398,11 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
                 }
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 originalInstruction = setBreakpoint(sonPid, funcAddr);
-                printf("PRF:: run #%d returned with %d\n", iCounter, regs.rax);
+                printf("PRF:: run #%d returned with %lld\n", iCounter, regs.rax);
                 iCounter++;
             }
         }
-        RETURN_ON_ERROR((sonPid, &wait_status));
+        RETURN_ON_ERROR(contChild(sonPid, &wait_status));
     }
 }
 
@@ -409,7 +411,10 @@ void sonProc(char *const argv[]) {
         perror("failed ptrace traceme");
         exit(0);
     }
-    execl(argv[EXE_NAME_ARG], *argv[EXE_NAME_ARG], NULL);
+
+    // call execl with the same arguments
+    execv(argv[EXE_NAME_ARG], &(argv[EXE_NAME_ARG]));
+
     perror("failed execl");
     
 }
