@@ -157,7 +157,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
     
     // Find Section header table
     Elf64_Off sectionHeaderOffset = elfHeader.e_shoff;
-    //printf("section header offset: %lx\n", sectionHeaderOffset);
+    // printf("section header offset: %lx\n", sectionHeaderOffset);
     Elf64_Half sectionHeaderLen = elfHeader.e_shnum;
     Elf64_Half sectionHeadeEntrySize = elfHeader.e_shentsize;
     Elf64_Shdr *sectionHeaderTable = (Elf64_Shdr *)calloc(sectionHeaderLen, sectionHeadeEntrySize);
@@ -195,7 +195,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
     for (j = 0; j < sectionHeaderLen; j++) {
         if (curr->sh_type == SHT_STRTAB && checkNameInFile(".strtab", elfFile, sectionHeaderTable[elfHeader.e_shstrndx].sh_offset + curr->sh_name)) {
 
-            //printf("FOUND str tab: %lx\n", curr->sh_offset);
+            // printf("FOUND str tab: %lx\n", curr->sh_offset);
             break;
         }
         curr = (Elf64_Shdr *)((char *)curr + sectionHeadeEntrySize);
@@ -203,7 +203,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 
     
     if (j == sectionHeaderLen) {
-        //printf("DIDN'T FIND STR TABLE\n");
+        // printf("DIDN'T FIND STR TABLE1\n");
         free(sectionHeaderTable);
         free(symTab);
         fclose(elfFile);
@@ -220,22 +220,23 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
     for (j = 0; j < sectionHeaderLen; j++) {
         if (curr->sh_type == SHT_STRTAB && checkNameInFile(".dynstr", elfFile, sectionHeaderTable[elfHeader.e_shstrndx].sh_offset + curr->sh_name)) {
 
-            //printf("FOUND str tab: %lx\n", curr->sh_offset);
+            // printf("FOUND str tab: %lx\n", curr->sh_offset);
             break;
         }
         curr = (Elf64_Shdr *)((char *)curr + sectionHeadeEntrySize);
     }
 
     
+    bool foundDynStr = false;
+    Elf64_Off dynstrTabOffset = 0;
     if (j == sectionHeaderLen) {
-        //printf("DIDN'T FIND STR TABLE\n");
-        free(sectionHeaderTable);
-        free(symTab);
-        fclose(elfFile);
-        return -1;
+        // printf("DIDN'T FIND STR TABLE2\n");
+    } else {
+        foundDynStr = true;
+        dynstrTabOffset = curr->sh_offset;
     }
 
-    Elf64_Off dynstrTabOffset = curr->sh_offset;
+    
 
 
 
@@ -248,11 +249,13 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
     int k =0;
     bool foundLocal = false;
     for (k = 0; k < symTabLen ; k++) {
+        // printf("symbol name: %s\n", (char *)(elfFile + strTabOffset + wantedSymbolEnt->st_name));
         if (checkNameInFile(symbol_name, elfFile, strTabOffset + wantedSymbolEnt->st_name)) {
             // Found symbol <confetti>, check if dymanic
+            //printf("FOUND SYMBOL\n");
             if (ELF64_ST_BIND(wantedSymbolEnt->st_info) == SYM_GLOBAL) {
                 // Check if in this file or not
-                if (wantedSymbolEnt->st_shndx == 0) {
+                if (wantedSymbolEnt->st_shndx == 0 && foundDynStr) {
                     // Get dyn offset
                     //printf("will check dyn sym\n");
                     unsigned long dynOffset = find_dynSymbol(symbol_name, elfFile, sectionHeaderTable, sectionHeaderLen, sectionHeadeEntrySize, &elfHeader, dynstrTabOffset);
@@ -263,6 +266,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
                     return dynOffset;
                 } else {
                     // FOUND
+                    // printf("FOUND GLOBAL\n");
                     *error_val = 1;
                     free(symTab);
                     free(sectionHeaderTable);
@@ -377,6 +381,7 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
     unsigned long originalInstruction = 0;
     if (!isDynamic) {
         // Stage 1 - we are not in Function context - set breakpoint on function first line
+        // printf("setting BP at: %lx\n", funcAddr);
         originalInstruction = setBreakpoint(sonPid, funcAddr);
         RETURN_ON_ERROR(contChild(sonPid, &wait_status));
     } else {
@@ -390,17 +395,20 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
     struct user_regs_struct regs;
     unsigned long retAddr;
     unsigned long currentAddress;
+     ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
     while (true) {
         
-        fflush(stdout);
         // Check if we are in function adress, by comparing correct adress to funcAddr
         // Get rip register
         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
         currentAddress = regs.rip -1;
+        // printf("in while, current addr: %lx\n", regs.rip);
+        fflush(stdout);
 
         //printf("in while, current addr: %lx\n", currentAddress);
         if (currentAddress == funcAddr) {
-            //printf("in S2\n");
+            // printf("in S2\n");
+            fflush(stdout);
             // Stage 2 - now we are in function first line, it was just called
             savedRsp = regs.rsp;
             removeBreakpoint(sonPid, funcAddr, originalInstruction, &regs);
@@ -414,14 +422,15 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
             // Stage 3 - We are now at the return address - check if in function context or not
             // We do this by comparing saved rsp to current rsp
             if (regs.rsp != savedRsp + 8) {
-                //printf("in S3 - in recursive\n");
+                // printf("in S3 - in recursive\n");
+                  fflush(stdout);
                 // We are in function context,advance one step, return BP at return address, and continue
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 RETURN_ON_ERROR(singleStepChild(sonPid, &wait_status));
                 originalInstruction = setBreakpoint(sonPid, retAddr);
             } else {
                 
-                //printf("in S3 - out recursive\n");
+                // printf("in S3 - out recursive\n");
                 // We are not in function context:
                 if (shouldUpdateAddr) {
                     // Update funcAddr to the real one from GOT
@@ -431,10 +440,12 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 originalInstruction = setBreakpoint(sonPid, funcAddr);
                 printf("PRF:: run #%d returned with %d\n", iCounter, regs.rax);
+                  fflush(stdout);
                 iCounter++;
             }
         }
         RETURN_ON_ERROR(contChild(sonPid, &wait_status));
+         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
     }
 }
 
