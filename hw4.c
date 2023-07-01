@@ -403,12 +403,12 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
         ptrace(PTRACE_GETREGS, sonPid, NULL, &regs);
         currentAddress = regs.rip -1;
         // printf("in while, current addr: %lx\n", regs.rip);
-        fflush(stdout);
+        //fflush(stdout);
 
         //printf("in while, current addr: %lx\n", currentAddress);
         if (currentAddress == funcAddr) {
             // printf("in S2\n");
-            fflush(stdout);
+            //fflush(stdout);
             // Stage 2 - now we are in function first line, it was just called
             savedRsp = regs.rsp;
             removeBreakpoint(sonPid, funcAddr, originalInstruction, &regs);
@@ -423,7 +423,7 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
             // We do this by comparing saved rsp to current rsp
             if (regs.rsp != savedRsp + 8) {
                 // printf("in S3 - in recursive\n");
-                  fflush(stdout);
+                  //fflush(stdout);
                 // We are in function context,advance one step, return BP at return address, and continue
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 RETURN_ON_ERROR(singleStepChild(sonPid, &wait_status));
@@ -440,7 +440,7 @@ void debuggerProc(int sonPid, bool isDynamic, unsigned long funcAddr) {
                 removeBreakpoint(sonPid, retAddr, originalInstruction, &regs);
                 originalInstruction = setBreakpoint(sonPid, funcAddr);
                 printf("PRF:: run #%d returned with %d\n", iCounter, regs.rax);
-                  fflush(stdout);
+                  //fflush(stdout);
                 iCounter++;
             }
         }
@@ -482,12 +482,12 @@ int main(int argc, char *const argv[]) {
 
     // Fork
     int pid = fork();
-    if (pid > 0) {
-        // Father process - Debugger
-        debuggerProc(pid, (err == 2), addr);
-    } else {
+    if (pid == 0) {
         // Son procces - the code
         sonProc(argv);
+    } else {
+        // Father process - Debugger
+        debuggerProc(pid, (err == 2), addr);
     }
 
     return 0;
